@@ -44,11 +44,7 @@ Run:
 
    python grabmax_server.py
 
-You should see:
 
-   ====================================================
-     GRABMAX Backend Server  —  http://localhost:5000
-   ====================================================
 Keep this window open — don't close it.
 
 ✅ Step 5 — Open the Website
