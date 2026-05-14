@@ -1,14 +1,8 @@
 """
-GRABMAX Backend Server v4.2 — AAC Audio Fix
-============================================
-Forces AAC audio in all MP4 downloads so they play correctly
-on Windows Media Player, VLC, phones — everywhere.
-
-Requirements:
-    pip install yt-dlp flask flask-cors
-
-Run:
-    python grabmax_server.py
+GRABMAX Backend Server v4.3 - Railway Fix
+==========================================
+Forces AAC audio in all MP4 downloads.
+Fixed PORT binding for Railway deployment.
 """
 
 import os, io, tempfile, traceback
@@ -36,6 +30,12 @@ BASE_OPTS = {
         "Accept-Language": "en-US,en;q=0.9",
     },
 }
+
+
+# ── health check so Railway knows app is alive ────────────────────────────────
+@app.route("/", methods=["GET"])
+def health():
+    return jsonify({"status": "GRABMAX is running", "version": "4.3"}), 200
 
 
 # ── /info ─────────────────────────────────────────────────────────────────────
@@ -97,43 +97,32 @@ def download():
         out_tmpl = os.path.join(tmp, "%(title).80s.%(ext)s")
 
         if ext in ("mp3", "m4a"):
-            # ── Pure audio extraction ──────────────────────────────────────
             ydl_opts = {
                 **BASE_OPTS,
                 "format":  "bestaudio/best",
                 "outtmpl": out_tmpl,
-                "postprocessors": [
-                    {
-                        "key":              "FFmpegExtractAudio",
-                        "preferredcodec":   ext,
-                        "preferredquality": "320" if ext == "mp3" else "0",
-                    }
-                ],
+                "postprocessors": [{
+                    "key":              "FFmpegExtractAudio",
+                    "preferredcodec":   ext,
+                    "preferredquality": "320" if ext == "mp3" else "0",
+                }],
             }
         else:
-            # ── Video + Audio → MP4 with AAC audio ────────────────────────
-            # YouTube provides audio as Opus/WebM which Windows cannot play.
-            # We download best video + best audio separately, then use FFmpeg
-            # to merge them and RE-ENCODE audio to AAC inside the MP4 container.
             ydl_opts = {
                 **BASE_OPTS,
                 "format":              format_id,
                 "outtmpl":             out_tmpl,
                 "merge_output_format": "mp4",
-                "postprocessors": [
-                    {
-                        # Re-encode audio to AAC after merging
-                        "key":            "FFmpegVideoRemuxer",
-                        "preferedformat": "mp4",
-                    }
-                ],
-                # Key fix: tell FFmpeg explicitly to re-encode audio to AAC
+                "postprocessors": [{
+                    "key":            "FFmpegVideoRemuxer",
+                    "preferedformat": "mp4",
+                }],
                 "postprocessor_args": {
                     "ffmpeg": [
-                        "-c:v", "copy",           # copy video stream (fast, no quality loss)
-                        "-c:a", "aac",            # re-encode audio to AAC (plays everywhere)
-                        "-b:a", "192k",           # good audio quality
-                        "-movflags", "+faststart", # web-optimised MP4
+                        "-c:v", "copy",
+                        "-c:a", "aac",
+                        "-b:a", "192k",
+                        "-movflags", "+faststart",
                     ]
                 },
             }
@@ -168,10 +157,10 @@ def download():
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
-def _allowed(url: str) -> bool:
+def _allowed(url):
     return any(d in url for d in ("youtube.com", "youtu.be", "instagram.com"))
 
-def _find_output(directory: str, expected: str):
+def _find_output(directory, expected):
     if os.path.isfile(expected):
         return expected
     try:
@@ -182,7 +171,7 @@ def _find_output(directory: str, expected: str):
         pass
     return None
 
-def _mime(ext: str) -> str:
+def _mime(ext):
     return {
         "mp4":  "video/mp4",
         "webm": "video/webm",
@@ -194,9 +183,9 @@ def _mime(ext: str) -> str:
 
 # ── entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    print("\n" + "="*56)
-    print("  GRABMAX Backend v4.2  —  http://localhost:5000")
-    print("  Audio: Opus → AAC fix applied ✅")
-    print("="*56 + "\n")
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 8080))
+    print(f"\n{'='*50}")
+    print(f"  GRABMAX Backend v4.3  — port {port}")
+    print(f"  Audio: Opus → AAC fix applied")
+    print(f"{'='*50}\n")
     app.run(host="0.0.0.0", port=port, debug=False)
