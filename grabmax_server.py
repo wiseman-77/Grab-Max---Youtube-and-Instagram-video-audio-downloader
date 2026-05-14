@@ -1,634 +1,202 @@
-<!DOCTYPE html>
-<html lang="en" data-theme="dark">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>GRABMAX — Media Downloader</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<style>
-/* ═══════════ THEMES ═══════════ */
-[data-theme="dark"] {
-  --bg:#060608; --surface:#0d0d12; --surface2:#13131a; --surface3:#1a1a24;
-  --border:rgba(255,255,255,0.07); --border2:rgba(255,255,255,0.13);
-  --text:#f0f0f8; --text2:#b0b0c8; --muted:#6b6b80; --shadow:rgba(0,0,0,0.5);
-  --noise-op:0.5; --card-hover:rgba(255,255,255,0.02);
-}
-[data-theme="light"] {
-  --bg:#f0f2f8; --surface:#ffffff; --surface2:#f4f5fc; --surface3:#eceef8;
-  --border:rgba(0,0,0,0.08); --border2:rgba(0,0,0,0.15);
-  --text:#0e0e18; --text2:#3a3a55; --muted:#8888a0; --shadow:rgba(0,0,0,0.1);
-  --noise-op:0.12; --card-hover:rgba(0,0,0,0.02);
-}
-:root {
-  --yt:#ff2d2d; --ig:#e040fb;
-  --yt-glow:rgba(255,45,45,0.3); --ig-glow:rgba(224,64,251,0.3);
-  --ok:#00c880; --warn:#ffb020;
-  --font:'Syne',sans-serif; --mono:'JetBrains Mono',monospace;
-}
+"""
+GRABMAX Backend Server v4.2 — AAC Audio Fix
+============================================
+Forces AAC audio in all MP4 downloads so they play correctly
+on Windows Media Player, VLC, phones — everywhere.
 
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-html{scroll-behavior:smooth}
-body{background:var(--bg);color:var(--text);font-family:var(--font);min-height:100vh;overflow-x:hidden;transition:background .3s,color .3s}
-body::before{content:'';position:fixed;inset:0;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");pointer-events:none;z-index:1000;opacity:var(--noise-op)}
+Requirements:
+    pip install yt-dlp flask flask-cors
 
-.bg-glow{position:fixed;border-radius:50%;filter:blur(120px);pointer-events:none;z-index:0}
-.bg-glow-1{width:600px;height:600px;background:radial-gradient(circle,rgba(255,45,45,0.1) 0%,transparent 70%);top:-200px;right:-100px;animation:drift1 12s ease-in-out infinite alternate}
-.bg-glow-2{width:500px;height:500px;background:radial-gradient(circle,rgba(224,64,251,0.08) 0%,transparent 70%);bottom:-100px;left:-150px;animation:drift2 15s ease-in-out infinite alternate}
-@keyframes drift1{from{transform:translate(0,0)}to{transform:translate(-40px,60px)}}
-@keyframes drift2{from{transform:translate(0,0)}to{transform:translate(50px,-40px)}}
+Run:
+    python grabmax_server.py
+"""
 
-.container{max-width:880px;margin:0 auto;padding:0 24px;position:relative;z-index:2}
+import os, io, tempfile, traceback
+from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS
 
-/* ── HEADER ── */
-header{padding:26px 0 0;display:flex;align-items:center;justify-content:space-between;gap:12px}
-.logo{font-size:22px;font-weight:800;letter-spacing:-.5px;display:flex;align-items:center;gap:10px}
-.logo-icon{width:36px;height:36px;border-radius:8px;background:linear-gradient(135deg,var(--yt),var(--ig));display:flex;align-items:center;justify-content:center;font-size:18px}
-.header-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.badge{font-size:10px;font-family:var(--mono);background:rgba(128,128,128,0.1);border:1px solid var(--border);padding:3px 8px;border-radius:20px;color:var(--muted);letter-spacing:1px;text-transform:uppercase}
+try:
+    import yt_dlp
+except ImportError:
+    raise SystemExit("Run: pip install yt-dlp flask flask-cors")
 
-/* THEME TOGGLE */
-.toggle-wrap{display:flex;align-items:center;gap:7px}
-.theme-lbl{font-size:11px;font-family:var(--mono);color:var(--muted)}
-.theme-toggle{width:46px;height:26px;border-radius:13px;border:1px solid var(--border2);background:var(--surface2);cursor:pointer;position:relative;transition:all .3s;flex-shrink:0}
-.theme-toggle::before{content:'🌙';position:absolute;left:5px;top:50%;transform:translateY(-50%);font-size:12px;transition:opacity .3s}
-.theme-toggle::after{content:'';position:absolute;top:4px;left:4px;width:16px;height:16px;border-radius:50%;background:var(--yt);transition:transform .3s,background .3s}
-[data-theme="light"] .theme-toggle::before{content:'☀️'}
-[data-theme="light"] .theme-toggle::after{transform:translateX(20px);background:#f59e0b}
+app = Flask(__name__)
+CORS(app)
 
-/* HISTORY BTN */
-.history-btn{display:flex;align-items:center;gap:6px;padding:7px 14px;border-radius:20px;border:1px solid var(--border2);background:var(--surface);color:var(--muted);font-family:var(--mono);font-size:11px;cursor:pointer;transition:all .2s;white-space:nowrap}
-.history-btn:hover{color:var(--text);border-color:var(--yt)}
-.h-count{background:var(--yt);color:#fff;border-radius:10px;padding:1px 7px;font-size:10px;font-weight:700;min-width:18px;text-align:center}
-
-/* ── HERO ── */
-.hero{padding:60px 0 44px;text-align:center}
-.hero-tag{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--muted);text-transform:uppercase;border:1px solid var(--border);border-radius:20px;padding:5px 14px;margin-bottom:22px}
-.hero-tag span{width:6px;height:6px;border-radius:50%;background:var(--ok);animation:pulse 2s infinite}
-@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.8)}}
-h1{font-size:clamp(42px,9vw,84px);font-weight:800;line-height:.95;letter-spacing:-3px;background:linear-gradient(135deg,var(--text) 30%,var(--muted));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:16px}
-.hero-sub{font-size:15px;color:var(--muted);max-width:420px;margin:0 auto 40px;line-height:1.6;font-family:var(--mono)}
-
-/* TABS */
-.tab-row{display:flex;gap:8px;justify-content:center;margin-bottom:20px;flex-wrap:wrap}
-.tab-btn{display:flex;align-items:center;gap:8px;padding:10px 22px;border-radius:30px;border:1px solid var(--border);background:var(--surface);color:var(--muted);font-family:var(--font);font-size:14px;font-weight:600;cursor:pointer;transition:all .25s}
-.tab-btn svg{width:18px;height:18px}
-.tab-btn:hover{color:var(--text);border-color:var(--border2)}
-.tab-btn.active-yt{background:rgba(255,45,45,0.12);border-color:var(--yt);color:var(--yt);box-shadow:0 0 20px var(--yt-glow)}
-.tab-btn.active-ig{background:rgba(224,64,251,0.12);border-color:var(--ig);color:var(--ig);box-shadow:0 0 20px var(--ig-glow)}
-
-/* CARD */
-.card{background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:26px;margin-bottom:16px;transition:border-color .3s,box-shadow .3s}
-.card.glow-yt{border-color:rgba(255,45,45,0.3);box-shadow:0 0 40px rgba(255,45,45,0.07)}
-.card.glow-ig{border-color:rgba(224,64,251,0.3);box-shadow:0 0 40px rgba(224,64,251,0.07)}
-
-.input-wrap{display:flex;gap:10px;align-items:stretch;background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:6px 6px 6px 16px;transition:border-color .3s}
-.input-wrap:focus-within{border-color:var(--border2)}
-.input-wrap input{flex:1;background:transparent;border:none;outline:none;color:var(--text);font-family:var(--mono);font-size:13px;min-width:0}
-.input-wrap input::placeholder{color:var(--muted)}
-
-.btn-fetch{padding:11px 26px;border-radius:9px;border:none;cursor:pointer;font-family:var(--font);font-size:14px;font-weight:700;transition:all .2s;white-space:nowrap}
-.btn-fetch.yt{background:var(--yt);color:#fff;box-shadow:0 4px 20px rgba(255,45,45,.35)}
-.btn-fetch.yt:hover{transform:translateY(-1px);box-shadow:0 8px 28px rgba(255,45,45,.5)}
-.btn-fetch.ig{background:var(--ig);color:#fff;box-shadow:0 4px 20px rgba(224,64,251,.35)}
-.btn-fetch.ig:hover{transform:translateY(-1px);box-shadow:0 8px 28px rgba(224,64,251,.5)}
-.btn-fetch:disabled{opacity:.5;cursor:not-allowed;transform:none!important}
-
-.options-row{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
-.opt-group{display:flex;flex-direction:column;gap:5px;flex:1;min-width:130px}
-.opt-label{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);font-family:var(--mono)}
-.opt-select{background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:9px 12px;font-family:var(--mono);font-size:12px;cursor:pointer;outline:none;transition:border-color .2s}
-.opt-select:focus{border-color:var(--border2)}
-
-.progress-wrap{height:3px;background:rgba(128,128,128,.1);border-radius:3px;margin-top:14px;overflow:hidden;display:none}
-.progress-bar{height:100%;width:0;border-radius:3px;transition:width .3s ease}
-.progress-bar.yt{background:linear-gradient(90deg,#ff2d2d,#ff6060)}
-.progress-bar.ig{background:linear-gradient(90deg,#e040fb,#ce93d8)}
-
-/* STATUS */
-.status-area{min-height:0}
-.status-box{background:var(--surface2);border:1px solid var(--border);border-radius:16px;padding:18px 22px;display:flex;align-items:flex-start;gap:14px;margin-bottom:14px;animation:fadeUp .3s ease}
-.status-icon{font-size:22px;flex-shrink:0;margin-top:2px}
-.status-title{font-size:14px;font-weight:700;margin-bottom:4px}
-.status-detail{font-size:12px;color:var(--muted);font-family:var(--mono);line-height:1.6}
-.status-box.loading .status-title{color:var(--warn)}
-.status-box.success .status-title{color:var(--ok)}
-.status-box.error .status-title{color:var(--yt)}
-.status-box.info .status-title{color:#60a5fa}
-.spinner{width:20px;height:20px;border-radius:50%;border:2px solid rgba(128,128,128,.2);border-top-color:var(--warn);animation:spin .7s linear infinite;flex-shrink:0;margin-top:3px}
-@keyframes spin{to{transform:rotate(360deg)}}
-@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
-
-/* MEDIA CARD */
-.media-card{background:var(--surface2);border:1px solid var(--border);border-radius:16px;overflow:hidden;margin-top:14px;animation:fadeUp .4s ease}
-.media-thumb-row{display:flex;gap:18px;padding:20px;align-items:flex-start}
-.thumb-wrap{width:140px;height:90px;border-radius:10px;background:var(--bg);flex-shrink:0;overflow:hidden;border:1px solid var(--border)}
-.thumb-wrap img{width:100%;height:100%;object-fit:cover}
-.thumb-placeholder{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:28px;color:var(--muted)}
-.media-meta{flex:1;min-width:0}
-.media-title{font-size:15px;font-weight:700;margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.media-tags{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
-.tag{font-size:10px;font-family:var(--mono);padding:3px 9px;border-radius:20px;border:1px solid var(--border);color:var(--muted)}
-.tag.highlight-yt{border-color:var(--yt);color:var(--yt);background:rgba(255,45,45,.08)}
-.tag.highlight-ig{border-color:var(--ig);color:var(--ig);background:rgba(224,64,251,.08)}
-
-.format-section{padding:0 20px 20px}
-.format-label{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--muted);font-family:var(--mono);margin-bottom:10px}
-.format-grid{display:flex;flex-direction:column;gap:6px}
-.format-row{display:flex;align-items:center;gap:12px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 14px;transition:border-color .2s,background .2s}
-.format-row:hover{border-color:var(--border2);background:var(--card-hover)}
-.format-badge{font-size:11px;font-family:var(--mono);font-weight:500;padding:3px 10px;border-radius:6px;min-width:58px;text-align:center}
-.fmt-4k{background:rgba(255,215,0,.15);color:#ffd700;border:1px solid rgba(255,215,0,.3)}
-.fmt-1080{background:rgba(0,200,128,.12);color:var(--ok);border:1px solid rgba(0,200,128,.3)}
-.fmt-720{background:rgba(96,165,250,.12);color:#60a5fa;border:1px solid rgba(96,165,250,.3)}
-.fmt-480{background:rgba(128,128,128,.1);color:var(--muted);border:1px solid var(--border)}
-.fmt-audio{background:rgba(224,64,251,.12);color:var(--ig);border:1px solid rgba(224,64,251,.3)}
-.format-desc{flex:1;font-size:12px;color:var(--muted);font-family:var(--mono)}
-.dl-btn{padding:7px 16px;border-radius:8px;border:none;cursor:pointer;font-family:var(--font);font-size:12px;font-weight:700;transition:all .2s}
-.dl-btn.yt-btn{background:rgba(255,45,45,.12);color:var(--yt);border:1px solid rgba(255,45,45,.3)}
-.dl-btn.yt-btn:hover{background:var(--yt);color:#fff}
-.dl-btn.ig-btn{background:rgba(224,64,251,.12);color:var(--ig);border:1px solid rgba(224,64,251,.3)}
-.dl-btn.ig-btn:hover{background:var(--ig);color:#fff}
-
-/* ══════════════════════════════
-   HISTORY PANEL
-══════════════════════════════ */
-.history-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:900;opacity:0;pointer-events:none;transition:opacity .3s;backdrop-filter:blur(4px)}
-.history-overlay.open{opacity:1;pointer-events:all}
-.history-panel{position:fixed;right:0;top:0;bottom:0;width:min(440px,100vw);background:var(--surface);border-left:1px solid var(--border);z-index:901;display:flex;flex-direction:column;transform:translateX(100%);transition:transform .35s cubic-bezier(.4,0,.2,1)}
-.history-panel.open{transform:translateX(0)}
-.hp-header{display:flex;align-items:center;justify-content:space-between;padding:22px 24px;border-bottom:1px solid var(--border)}
-.hp-title{font-size:16px;font-weight:800;display:flex;align-items:center;gap:8px}
-.hp-actions{display:flex;gap:8px;align-items:center}
-.hp-close{width:32px;height:32px;border-radius:8px;border:1px solid var(--border);background:var(--surface2);color:var(--muted);cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;transition:all .2s}
-.hp-close:hover{color:var(--text);border-color:var(--border2)}
-.hp-clear{padding:5px 12px;border-radius:8px;border:1px solid rgba(255,45,45,.3);background:rgba(255,45,45,.08);color:var(--yt);font-family:var(--mono);font-size:11px;cursor:pointer;transition:all .2s}
-.hp-clear:hover{background:var(--yt);color:#fff}
-.hp-list{flex:1;overflow-y:auto;padding:16px}
-.hp-list::-webkit-scrollbar{width:4px}
-.hp-list::-webkit-scrollbar-thumb{background:rgba(128,128,128,.2);border-radius:4px}
-.hp-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:200px;color:var(--muted);font-family:var(--mono);font-size:13px;gap:10px}
-.hp-empty-icon{font-size:40px}
-
-/* HISTORY ITEM */
-.hi{display:flex;gap:12px;padding:14px;background:var(--surface2);border:1px solid var(--border);border-radius:12px;margin-bottom:10px;transition:border-color .2s;animation:fadeUp .3s ease}
-.hi:hover{border-color:var(--border2)}
-.hi-thumb{width:72px;height:46px;border-radius:6px;background:var(--bg);flex-shrink:0;overflow:hidden;border:1px solid var(--border)}
-.hi-thumb img{width:100%;height:100%;object-fit:cover}
-.hi-thumb-ph{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:18px}
-.hi-meta{flex:1;min-width:0}
-.hi-title{font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:4px}
-.hi-tags{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:5px}
-.hi-tag{font-size:9px;font-family:var(--mono);padding:2px 7px;border-radius:10px;border:1px solid var(--border);color:var(--muted)}
-.hi-date{font-size:10px;color:var(--muted);font-family:var(--mono)}
-.hi-actions{display:flex;flex-direction:column;gap:6px;flex-shrink:0}
-.hi-re-btn{padding:5px 10px;border-radius:7px;border:1px solid var(--border);background:var(--surface);color:var(--muted);font-family:var(--mono);font-size:10px;cursor:pointer;transition:all .2s;white-space:nowrap}
-.hi-re-btn:hover{color:var(--text);border-color:var(--border2)}
-.hi-del-btn{padding:5px 10px;border-radius:7px;border:1px solid rgba(255,45,45,.2);background:rgba(255,45,45,.06);color:var(--yt);font-family:var(--mono);font-size:10px;cursor:pointer;transition:all .2s}
-.hi-del-btn:hover{background:var(--yt);color:#fff}
-
-/* FEATURES */
-.features{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:44px 0}
-.feature{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px;transition:border-color .3s,transform .3s}
-.feature:hover{border-color:var(--border2);transform:translateY(-2px)}
-.feature-icon{font-size:24px;margin-bottom:8px}
-.feature-title{font-size:14px;font-weight:700;margin-bottom:4px}
-.feature-desc{font-size:12px;color:var(--muted);font-family:var(--mono);line-height:1.5}
-
-.disclaimer{margin-top:24px;padding:18px 22px;background:rgba(255,176,32,.05);border:1px solid rgba(255,176,32,.15);border-radius:14px}
-.disclaimer-title{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;font-family:var(--mono);color:var(--warn);margin-bottom:7px}
-.disclaimer p{font-size:12px;color:var(--muted);font-family:var(--mono);line-height:1.7}
-footer{border-top:1px solid var(--border);padding:24px 0;margin-top:50px;text-align:center;color:var(--muted);font-family:var(--mono);font-size:11px}
-
-@media(max-width:600px){
-  .media-thumb-row{flex-direction:column}
-  .thumb-wrap{width:100%;height:180px}
-  .options-row{flex-direction:column}
-  h1{letter-spacing:-2px}
-  .header-right{gap:6px}
-}
-</style>
-</head>
-<body>
-<div class="bg-glow bg-glow-1"></div>
-<div class="bg-glow bg-glow-2"></div>
-
-<!-- HISTORY OVERLAY & PANEL -->
-<div class="history-overlay" id="h-overlay" onclick="toggleHistory()"></div>
-<div class="history-panel" id="h-panel">
-  <div class="hp-header">
-    <div class="hp-title">📋 Download History</div>
-    <div class="hp-actions">
-      <button class="hp-clear" onclick="clearHistory()">🗑 Clear All</button>
-      <button class="hp-close" onclick="toggleHistory()">✕</button>
-    </div>
-  </div>
-  <div class="hp-list" id="hp-list"></div>
-</div>
-
-<div class="container">
-  <header>
-    <div class="logo">
-      <div class="logo-icon">⚡</div>
-      GRABMAX
-    </div>
-    <div class="header-right">
-      <div class="badge">v5.0</div>
-      <button class="history-btn" onclick="toggleHistory()">
-        📋 History <span class="h-count" id="h-count">0</span>
-      </button>
-      <div class="toggle-wrap">
-        <span class="theme-lbl" id="theme-lbl">🌙</span>
-        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode"></button>
-      </div>
-    </div>
-  </header>
-
-  <section class="hero">
-    <div class="hero-tag"><span></span> Videos · Audio · Highest Quality</div>
-    <h1>Grab Any<br>Media.</h1>
-    <p class="hero-sub">Download YouTube & Instagram videos and audio at the highest quality. No ads. No limits.</p>
-
-    <!-- TABS -->
-    <div class="tab-row">
-      <button class="tab-btn active-yt" id="tab-yt" onclick="setTab('yt')">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M23.5 6.19a3 3 0 0 0-2.12-2.12C19.54 3.5 12 3.5 12 3.5s-7.54 0-9.38.57A3 3 0 0 0 .5 6.19C0 8.04 0 12 0 12s0 3.96.5 5.81a3 3 0 0 0 2.12 2.12C4.46 20.5 12 20.5 12 20.5s7.54 0 9.38-.57a3 3 0 0 0 2.12-2.12C24 15.96 24 12 24 12s0-3.96-.5-5.81zM9.75 15.5V8.5l6.25 3.5-6.25 3.5z"/></svg>
-        YouTube
-      </button>
-      <button class="tab-btn" id="tab-ig" onclick="setTab('ig')">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/></svg>
-        Instagram
-      </button>
-    </div>
-
-    <!-- MAIN CARD -->
-    <div class="card glow-yt" id="main-card" style="text-align:left">
-      <div class="input-wrap">
-        <input type="text" id="url-input" placeholder="Paste YouTube or Instagram URL here..." autocomplete="off" spellcheck="false">
-        <button class="btn-fetch yt" id="fetch-btn" onclick="analyzeUrl()">Analyze →</button>
-      </div>
-      <div class="options-row">
-        <div class="opt-group">
-          <span class="opt-label">Type</span>
-          <select class="opt-select" id="opt-type">
-            <option value="video+audio">📹 Video + Audio</option>
-            <option value="audio">🎵 Audio Only</option>
-          </select>
-        </div>
-        <div class="opt-group">
-          <span class="opt-label">Quality</span>
-          <select class="opt-select" id="opt-quality">
-            <option value="best">✨ Best Available</option>
-            <option value="4k">4K (2160p)</option>
-            <option value="1080">1080p Full HD</option>
-            <option value="720">720p HD</option>
-            <option value="480">480p SD</option>
-          </select>
-        </div>
-        <div class="opt-group">
-          <span class="opt-label">Format</span>
-          <select class="opt-select" id="opt-format">
-            <option value="mp4">MP4</option>
-            <option value="mp3">MP3 (audio)</option>
-            <option value="m4a">M4A (audio)</option>
-          </select>
-        </div>
-      </div>
-      <div class="progress-wrap" id="progress-wrap">
-        <div class="progress-bar yt" id="progress-bar"></div>
-      </div>
-    </div>
-
-    <div class="status-area" id="status-area"></div>
-  </section>
-
-  <div class="features">
-    <div class="feature"><div class="feature-icon">⚡</div><div class="feature-title">Highest Quality</div><div class="feature-desc">4K, 1080p, 720p or best available.</div></div>
-    <div class="feature"><div class="feature-icon">🎵</div><div class="feature-title">AAC Audio Fix</div><div class="feature-desc">All MP4s have AAC audio — plays on Windows, phones, everywhere.</div></div>
-    <div class="feature"><div class="feature-icon">📋</div><div class="feature-title">Download History</div><div class="feature-desc">Every download saved. Re-download anytime with one click.</div></div>
-    <div class="feature"><div class="feature-icon">🌙</div><div class="feature-title">Dark / Light Mode</div><div class="feature-desc">Toggle theme anytime. Preference saved automatically.</div></div>
-  </div>
-
-  <div class="disclaimer">
-    <div class="disclaimer-title">⚠️ Legal Notice</div>
-    <p>For personal, non-commercial use only. Only download content you own or have rights to. Respect copyright laws and platform Terms of Service.</p>
-  </div>
-  <footer>Built with yt-dlp · GRABMAX v5.0 © 2026 · For personal use only</footer>
-</div>
-
-<script>
-const API = 'http://localhost:5000';
-let currentTab = 'yt';
-let currentMediaInfo = null;
-let historyVisible = false;
-
-// ═══════════════════════════════════════════
-// THEME
-// ═══════════════════════════════════════════
-function loadTheme() {
-  const saved = localStorage.getItem('grabmax-theme') || 'dark';
-  document.documentElement.setAttribute('data-theme', saved);
-  updateThemeLabel(saved);
-}
-function toggleTheme() {
-  const cur = document.documentElement.getAttribute('data-theme');
-  const next = cur === 'dark' ? 'light' : 'dark';
-  document.documentElement.setAttribute('data-theme', next);
-  localStorage.setItem('grabmax-theme', next);
-  updateThemeLabel(next);
-}
-function updateThemeLabel(theme) {
-  document.getElementById('theme-lbl').textContent = theme === 'dark' ? '🌙' : '☀️';
+BASE_OPTS = {
+    "quiet": True,
+    "no_warnings": True,
+    "geo_bypass": True,
+    "http_headers": {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+    },
 }
 
-// ═══════════════════════════════════════════
-// TAB
-// ═══════════════════════════════════════════
-function setTab(tab) {
-  currentTab = tab;
-  ['yt','ig'].forEach(t => {
-    document.getElementById('tab-'+t).className = 'tab-btn' + (t===tab ? ' active-'+t : '');
-  });
-  document.getElementById('main-card').className = 'card glow-' + tab;
-  document.getElementById('fetch-btn').className = 'btn-fetch ' + tab;
-  document.getElementById('progress-bar').className = 'progress-bar ' + tab;
-  clearStatus();
-  document.getElementById('url-input').placeholder =
-    tab === 'yt' ? 'Paste YouTube URL here...' : 'Paste Instagram Reel / Post URL here...';
-}
 
-// Auto-detect tab
-document.getElementById('url-input').addEventListener('input', function() {
-  const v = this.value.trim();
-  if (v.includes('youtube.com') || v.includes('youtu.be')) setTab('yt');
-  else if (v.includes('instagram.com')) setTab('ig');
-});
+# ── /info ─────────────────────────────────────────────────────────────────────
+@app.route("/info", methods=["POST"])
+def get_info():
+    data = request.get_json(force=True)
+    url  = (data or {}).get("url", "").strip()
+    if not url:           return jsonify({"error": "No URL provided"}), 400
+    if not _allowed(url): return jsonify({"error": "Only YouTube and Instagram URLs are supported"}), 400
 
-// ═══════════════════════════════════════════
-// ANALYZE
-// ═══════════════════════════════════════════
-async function analyzeUrl() {
-  const url = document.getElementById('url-input').value.trim();
-  if (!url) return showStatus('error','❌','Empty URL','Paste a YouTube or Instagram URL first.');
-  if (!isAllowed(url)) return showStatus('error','❌','Invalid URL','Only YouTube and Instagram URLs are supported.');
-  showStatus('loading', null, 'Analyzing URL…', 'Fetching video metadata and available formats.');
-  document.getElementById('fetch-btn').disabled = true;
-  try {
-    const res = await fetch(`${API}/info`, {
-      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url})
-    });
-    if (!res.ok) { const e=await res.json().catch(()=>({})); throw new Error(e.error||`Error ${res.status}`); }
-    currentMediaInfo = await res.json();
-    renderMediaCard(currentMediaInfo);
-  } catch(e) {
-    if (e.message.includes('fetch') || e.message.includes('NetworkError'))
-      showStatus('info','🖥️','Backend Not Running','Open CMD in D:\\downloads\\grabmax and run:\npython grabmax_server.py');
-    else showStatus('error','❌','Error', e.message);
-  } finally { document.getElementById('fetch-btn').disabled = false; }
-}
+    try:
+        with yt_dlp.YoutubeDL({**BASE_OPTS, "skip_download": True}) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except yt_dlp.utils.DownloadError as e:
+        return jsonify({"error": str(e)}), 422
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
-// ═══════════════════════════════════════════
-// DOWNLOAD
-// ═══════════════════════════════════════════
-async function startDownload(format_id, ext, label) {
-  const url = document.getElementById('url-input').value.trim();
-  showProgress(true); animateProgress();
-  showStatus('loading', null, `Downloading ${label}…`, 'Converting audio to AAC — please wait…');
-  try {
-    const res = await fetch(`${API}/download`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({url, format_id, ext})
-    });
-    if (!res.ok) throw new Error(`Download failed (${res.status})`);
-    const blob = await res.blob();
+    formats = [
+        {
+            "format_id":   f.get("format_id"),
+            "ext":         f.get("ext"),
+            "height":      f.get("height"),
+            "width":       f.get("width"),
+            "fps":         f.get("fps"),
+            "vcodec":      f.get("vcodec"),
+            "acodec":      f.get("acodec"),
+            "abr":         f.get("abr"),
+            "filesize":    f.get("filesize") or f.get("filesize_approx"),
+            "format_note": f.get("format_note", ""),
+        }
+        for f in info.get("formats", [])
+    ]
 
-    // ── Smart filename: no (1)(2)(3) duplicates ──
-    const rawTitle = currentMediaInfo?.title || 'grabmax_download';
-    const filename = smartFilename(rawTitle, ext);
+    return jsonify({
+        "title":       info.get("title", "Untitled"),
+        "uploader":    info.get("uploader") or info.get("channel"),
+        "duration":    info.get("duration"),
+        "view_count":  info.get("view_count"),
+        "thumbnail":   info.get("thumbnail"),
+        "webpage_url": info.get("webpage_url", url),
+        "formats":     formats,
+    })
 
-    triggerDownload(blob, filename);
-    showProgress(false);
-    showStatus('success','✅','Download Complete!',`Saved as: ${filename}`);
 
-    // Save to history
-    addToHistory({
-      url, title: currentMediaInfo?.title || 'Unknown',
-      thumb: currentMediaInfo?.thumbnail || '',
-      platform: currentTab, quality: label, ext, format_id, filename,
-    });
+# ── /download ─────────────────────────────────────────────────────────────────
+@app.route("/download", methods=["POST"])
+def download():
+    data      = request.get_json(force=True)
+    url       = (data or {}).get("url", "").strip()
+    format_id = (data or {}).get("format_id", "bestvideo+bestaudio/best")
+    ext       = (data or {}).get("ext", "mp4")
 
-  } catch(e) {
-    showProgress(false);
-    showStatus('error','❌','Download Failed', e.message);
-  }
-}
+    if not url:           return jsonify({"error": "No URL provided"}), 400
+    if not _allowed(url): return jsonify({"error": "Only YouTube and Instagram URLs supported"}), 400
 
-// ═══════════════════════════════════════════
-// SMART FILENAME — no (1)(2)(3)
-// ═══════════════════════════════════════════
-function getDownloadedNames() {
-  try { return JSON.parse(localStorage.getItem('grabmax-filenames') || '[]'); }
-  catch { return []; }
-}
-function saveDownloadedName(name) {
-  const names = getDownloadedNames();
-  if (!names.includes(name)) { names.push(name); localStorage.setItem('grabmax-filenames', JSON.stringify(names)); }
-}
-function smartFilename(title, ext) {
-  // Sanitize: remove special chars that Windows doesn't allow
-  const safe = title.replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, ' ').trim().slice(0, 80);
-  const base = `${safe}.${ext}`;
-  const names = getDownloadedNames();
+    with tempfile.TemporaryDirectory() as tmp:
+        out_tmpl = os.path.join(tmp, "%(title).80s.%(ext)s")
 
-  if (!names.includes(base)) {
-    saveDownloadedName(base);
-    return base;
-  }
-  // Already downloaded before — add _v2, _v3, etc.
-  let counter = 2;
-  while (true) {
-    const candidate = `${safe}_v${counter}.${ext}`;
-    if (!names.includes(candidate)) {
-      saveDownloadedName(candidate);
-      return candidate;
-    }
-    counter++;
-  }
-}
+        if ext in ("mp3", "m4a"):
+            # ── Pure audio extraction ──────────────────────────────────────
+            ydl_opts = {
+                **BASE_OPTS,
+                "format":  "bestaudio/best",
+                "outtmpl": out_tmpl,
+                "postprocessors": [
+                    {
+                        "key":              "FFmpegExtractAudio",
+                        "preferredcodec":   ext,
+                        "preferredquality": "320" if ext == "mp3" else "0",
+                    }
+                ],
+            }
+        else:
+            # ── Video + Audio → MP4 with AAC audio ────────────────────────
+            # YouTube provides audio as Opus/WebM which Windows cannot play.
+            # We download best video + best audio separately, then use FFmpeg
+            # to merge them and RE-ENCODE audio to AAC inside the MP4 container.
+            ydl_opts = {
+                **BASE_OPTS,
+                "format":              format_id,
+                "outtmpl":             out_tmpl,
+                "merge_output_format": "mp4",
+                "postprocessors": [
+                    {
+                        # Re-encode audio to AAC after merging
+                        "key":            "FFmpegVideoRemuxer",
+                        "preferedformat": "mp4",
+                    }
+                ],
+                # Key fix: tell FFmpeg explicitly to re-encode audio to AAC
+                "postprocessor_args": {
+                    "ffmpeg": [
+                        "-c:v", "copy",           # copy video stream (fast, no quality loss)
+                        "-c:a", "aac",            # re-encode audio to AAC (plays everywhere)
+                        "-b:a", "192k",           # good audio quality
+                        "-movflags", "+faststart", # web-optimised MP4
+                    ]
+                },
+            }
 
-// ═══════════════════════════════════════════
-// MEDIA CARD
-// ═══════════════════════════════════════════
-function renderMediaCard(data) {
-  const accent = currentTab;
-  const hlClass = 'highlight-' + accent;
-  const duration = data.duration ? formatDuration(data.duration) : '—';
-  const rows = [
-    { id:'bestvideo+bestaudio/best',          ext:'mp4', res:'✨ Best', cls:'fmt-1080', desc:'Highest quality + AAC audio' },
-    { id:'bestvideo[height<=2160]+bestaudio', ext:'mp4', res:'4K',     cls:'fmt-4k',   desc:'2160p Ultra HD' },
-    { id:'bestvideo[height<=1080]+bestaudio', ext:'mp4', res:'1080p',  cls:'fmt-1080', desc:'Full HD + AAC audio' },
-    { id:'bestvideo[height<=720]+bestaudio',  ext:'mp4', res:'720p',   cls:'fmt-720',  desc:'HD + AAC audio' },
-    { id:'bestvideo[height<=480]+bestaudio',  ext:'mp4', res:'480p',   cls:'fmt-480',  desc:'Standard definition' },
-    { id:'bestaudio/best',                    ext:'mp3', res:'MP3',    cls:'fmt-audio',desc:'Audio only — 320kbps' },
-    { id:'bestaudio/best',                    ext:'m4a', res:'M4A',    cls:'fmt-audio',desc:'Audio — AAC' },
-  ];
-  const fmtRows = rows.map(r => `
-    <div class="format-row">
-      <span class="format-badge ${r.cls}">${r.res}</span>
-      <span class="format-desc">${r.desc}</span>
-      <button class="dl-btn ${accent}-btn" onclick="startDownload('${r.id}','${r.ext}','${r.res}')">↓ Download</button>
-    </div>`).join('');
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info     = ydl.extract_info(url, download=True)
+                expected = ydl.prepare_filename(info)
+        except yt_dlp.utils.DownloadError as e:
+            return jsonify({"error": str(e)}), 422
+        except Exception as e:
+            traceback.print_exc()
+            return jsonify({"error": str(e)}), 500
 
-  document.getElementById('status-area').innerHTML = `
-    <div class="media-card">
-      <div class="media-thumb-row">
-        <div class="thumb-wrap">
-          ${data.thumbnail
-            ? `<img src="${data.thumbnail}" alt="thumb" onerror="this.parentNode.innerHTML='<div class=\\"thumb-placeholder\\">🎬</div>'">`
-            : '<div class="thumb-placeholder">🎬</div>'}
-        </div>
-        <div class="media-meta">
-          <div class="media-title">${escHtml(data.title||'Untitled')}</div>
-          <div class="media-tags">
-            <span class="tag ${hlClass}">${accent==='yt'?'YouTube':'Instagram'}</span>
-            ${data.uploader?`<span class="tag">${escHtml(data.uploader)}</span>`:''}
-            ${duration!=='—'?`<span class="tag">⏱ ${duration}</span>`:''}
-            ${data.view_count?`<span class="tag">👁 ${fmtNum(data.view_count)}</span>`:''}
-          </div>
-        </div>
-      </div>
-      <div class="format-section">
-        <div class="format-label">Choose Format & Quality</div>
-        <div class="format-grid">${fmtRows}</div>
-      </div>
-    </div>`;
-}
+        out_file = _find_output(tmp, expected)
+        if not out_file:
+            return jsonify({"error": "Download produced no output file"}), 500
 
-// ═══════════════════════════════════════════
-// HISTORY
-// ═══════════════════════════════════════════
-function getHistory() {
-  try { return JSON.parse(localStorage.getItem('grabmax-history') || '[]'); }
-  catch { return []; }
-}
-function saveHistory(h) { localStorage.setItem('grabmax-history', JSON.stringify(h)); }
+        with open(out_file, "rb") as fh:
+            raw = fh.read()
 
-function addToHistory(item) {
-  const h = getHistory();
-  h.unshift({ ...item, date: new Date().toISOString(), id: Date.now() });
-  // Keep max 100 items
-  if (h.length > 100) h.splice(100);
-  saveHistory(h);
-  updateHistoryCount();
-  if (historyVisible) renderHistoryPanel();
-}
+        filename = os.path.basename(out_file)
+        if ext == "mp4" and not filename.lower().endswith(".mp4"):
+            filename = os.path.splitext(filename)[0] + ".mp4"
 
-function updateHistoryCount() {
-  document.getElementById('h-count').textContent = getHistory().length;
-}
+        return send_file(
+            io.BytesIO(raw),
+            mimetype=_mime(ext),
+            as_attachment=True,
+            download_name=filename,
+        )
 
-function toggleHistory() {
-  historyVisible = !historyVisible;
-  document.getElementById('h-overlay').classList.toggle('open', historyVisible);
-  document.getElementById('h-panel').classList.toggle('open', historyVisible);
-  if (historyVisible) renderHistoryPanel();
-}
 
-function renderHistoryPanel() {
-  const h = getHistory();
-  const list = document.getElementById('hp-list');
-  if (!h.length) {
-    list.innerHTML = `<div class="hp-empty"><div class="hp-empty-icon">📭</div>No downloads yet.<br>Download something to see it here!</div>`;
-    return;
-  }
-  list.innerHTML = h.map(item => `
-    <div class="hi" id="hi-${item.id}">
-      <div class="hi-thumb">
-        ${item.thumb
-          ? `<img src="${item.thumb}" alt="" onerror="this.parentNode.innerHTML='<div class=\\"hi-thumb-ph\\">🎬</div>'">`
-          : '<div class="hi-thumb-ph">🎬</div>'}
-      </div>
-      <div class="hi-meta">
-        <div class="hi-title" title="${escHtml(item.title)}">${escHtml(item.title)}</div>
-        <div class="hi-tags">
-          <span class="hi-tag">${item.platform==='yt'?'YouTube':'Instagram'}</span>
-          <span class="hi-tag">${item.quality}</span>
-          <span class="hi-tag">${item.ext.toUpperCase()}</span>
-        </div>
-        <div class="hi-date">📅 ${formatDate(item.date)}</div>
-        <div class="hi-date" style="margin-top:2px">💾 ${escHtml(item.filename||'')}</div>
-      </div>
-      <div class="hi-actions">
-        <button class="hi-re-btn" onclick="reDownload(${item.id})">↓ Again</button>
-        <button class="hi-del-btn" onclick="deleteHistoryItem(${item.id})">✕</button>
-      </div>
-    </div>`).join('');
-}
+# ── helpers ───────────────────────────────────────────────────────────────────
+def _allowed(url: str) -> bool:
+    return any(d in url for d in ("youtube.com", "youtu.be", "instagram.com"))
 
-function reDownload(id) {
-  const item = getHistory().find(h => h.id === id);
-  if (!item) return;
-  toggleHistory();
-  document.getElementById('url-input').value = item.url;
-  setTab(item.platform);
-  // Small delay then auto-analyze
-  setTimeout(() => analyzeUrl(), 300);
-}
+def _find_output(directory: str, expected: str):
+    if os.path.isfile(expected):
+        return expected
+    try:
+        files = [os.path.join(directory, f) for f in os.listdir(directory)]
+        if files:
+            return max(files, key=os.path.getsize)
+    except Exception:
+        pass
+    return None
 
-function deleteHistoryItem(id) {
-  const h = getHistory().filter(item => item.id !== id);
-  saveHistory(h);
-  updateHistoryCount();
-  renderHistoryPanel();
-}
+def _mime(ext: str) -> str:
+    return {
+        "mp4":  "video/mp4",
+        "webm": "video/webm",
+        "mkv":  "video/x-matroska",
+        "mp3":  "audio/mpeg",
+        "m4a":  "audio/mp4",
+    }.get(ext, "application/octet-stream")
 
-function clearHistory() {
-  if (!confirm('Clear all download history?')) return;
-  saveHistory([]);
-  updateHistoryCount();
-  renderHistoryPanel();
-}
 
-function formatDate(iso) {
-  const d = new Date(iso);
-  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
-}
-
-// ═══════════════════════════════════════════
-// STATUS / PROGRESS
-// ═══════════════════════════════════════════
-function showStatus(type, icon, title, detail) {
-  document.getElementById('status-area').innerHTML = `
-    <div class="status-box ${type}">
-      ${type==='loading'?'<div class="spinner"></div>':`<div class="status-icon">${icon}</div>`}
-      <div><div class="status-title">${escHtml(title)}</div><div class="status-detail">${escHtml(detail).replace(/\n/g,'<br>')}</div></div>
-    </div>`;
-}
-function clearStatus() { document.getElementById('status-area').innerHTML = ''; }
-function showProgress(show) {
-  document.getElementById('progress-wrap').style.display = show ? 'block' : 'none';
-  if (!show) document.getElementById('progress-bar').style.width = '0';
-}
-function animateProgress() {
-  let w = 0; const bar = document.getElementById('progress-bar');
-  const iv = setInterval(() => { if(w>=85){clearInterval(iv);return;} w+=Math.random()*7; bar.style.width=Math.min(w,85)+'%'; }, 350);
-}
-
-// ═══════════════════════════════════════════
-// HELPERS
-// ═══════════════════════════════════════════
-function isAllowed(url) { return url.includes('youtube.com')||url.includes('youtu.be')||url.includes('instagram.com'); }
-function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-function formatDuration(s) { const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60; return h?`${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`:`${m}:${String(sec).padStart(2,'0')}`; }
-function fmtNum(n) { if(n>=1e9)return(n/1e9).toFixed(1)+'B'; if(n>=1e6)return(n/1e6).toFixed(1)+'M'; if(n>=1e3)return(n/1e3).toFixed(1)+'K'; return n; }
-function triggerDownload(blob, filename) { const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=filename; document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1000); }
-
-document.getElementById('url-input').addEventListener('keydown', e => { if(e.key==='Enter') analyzeUrl(); });
-
-// ── INIT ──
-loadTheme();
-setTab('yt');
-updateHistoryCount();
-</script>
-</body>
-</html>
+# ── entry point ───────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    print("\n" + "="*56)
+    print("  GRABMAX Backend v4.2  —  http://localhost:5000")
+    print("  Audio: Opus → AAC fix applied ✅")
+    print("="*56 + "\n")
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
