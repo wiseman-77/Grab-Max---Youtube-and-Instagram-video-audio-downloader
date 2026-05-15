@@ -1,13 +1,13 @@
 """
-GRABMAX Backend Server v4.5
+GRABMAX Backend Server v4.7
 ============================
-- Fixed: "Requested format not available" on analyze
+- Fixed: FFmpeg location explicitly set for Railway
 - AAC audio fix
 - Cookie support
 - Railway PORT fix
 """
 
-import os, io, tempfile, traceback
+import os, io, tempfile, traceback, shutil
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 
@@ -21,11 +21,15 @@ CORS(app)
 
 COOKIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
 
+# Auto-detect ffmpeg location
+FFMPEG_PATH = shutil.which("ffmpeg") or "/usr/bin/ffmpeg" or "/nix/var/nix/profiles/default/bin/ffmpeg"
+
 def get_base_opts():
     opts = {
-        "quiet": True,
-        "no_warnings": True,
+        "quiet": False,
+        "no_warnings": False,
         "geo_bypass": True,
+        "ffmpeg_location": FFMPEG_PATH,
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -43,14 +47,17 @@ def get_base_opts():
 # ── health check ──────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
 def health():
+    ffmpeg_found = bool(shutil.which("ffmpeg"))
     return jsonify({
         "status": "GRABMAX is running",
-        "version": "4.6",
-        "cookies": "loaded" if os.path.exists(COOKIES_FILE) else "missing"
+        "version": "4.7",
+        "cookies": "loaded" if os.path.exists(COOKIES_FILE) else "missing",
+        "ffmpeg": "found" if ffmpeg_found else "missing",
+        "ffmpeg_path": FFMPEG_PATH,
     }), 200
 
 
-# ── /info — NO format specified, just get metadata ────────────────────────────
+# ── /info ─────────────────────────────────────────────────────────────────────
 @app.route("/info", methods=["POST"])
 def get_info():
     data = request.get_json(force=True)
@@ -61,8 +68,6 @@ def get_info():
     opts = {
         **get_base_opts(),
         "skip_download": True,
-        "extractor_args": {"youtube": {"skip": ["dash", "hls"]}},
-        # No "format" key here — just fetch all available info
     }
 
     try:
@@ -104,9 +109,9 @@ def get_info():
 # ── /download ─────────────────────────────────────────────────────────────────
 @app.route("/download", methods=["POST"])
 def download():
-    data      = request.get_json(force=True)
-    url       = (data or {}).get("url", "").strip()
-    ext       = (data or {}).get("ext", "mp4")
+    data = request.get_json(force=True)
+    url  = (data or {}).get("url", "").strip()
+    ext  = (data or {}).get("ext", "mp4")
 
     if not url:           return jsonify({"error": "No URL provided"}), 400
     if not _allowed(url): return jsonify({"error": "Only YouTube and Instagram URLs supported"}), 400
@@ -204,8 +209,8 @@ def _mime(ext):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     print(f"\n{'='*50}")
-    print(f"  GRABMAX Backend v4.6  —  port {port}")
+    print(f"  GRABMAX Backend v4.7  —  port {port}")
+    print(f"  FFmpeg: {FFMPEG_PATH}")
     print(f"  Cookies: {'loaded' if os.path.exists(COOKIES_FILE) else 'missing'}")
-    print(f"  Audio: Opus to AAC fix applied")
     print(f"{'='*50}\n")
     app.run(host="0.0.0.0", port=port, debug=False)
