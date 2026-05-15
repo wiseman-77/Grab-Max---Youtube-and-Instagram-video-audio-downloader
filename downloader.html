@@ -397,7 +397,7 @@ async function startDownload(format_id, ext, label) {
   try {
     const res = await fetch(`${API}/download`, {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({url, format_id, ext})
+      body:JSON.stringify({url, ext, res: label})
     });
     if (!res.ok) throw new Error(`Download failed (${res.status})`);
     const blob = await res.blob();
