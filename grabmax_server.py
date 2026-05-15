@@ -45,7 +45,7 @@ def get_base_opts():
 def health():
     return jsonify({
         "status": "GRABMAX is running",
-        "version": "4.5",
+        "version": "4.6",
         "cookies": "loaded" if os.path.exists(COOKIES_FILE) else "missing"
     }), 200
 
@@ -61,6 +61,7 @@ def get_info():
     opts = {
         **get_base_opts(),
         "skip_download": True,
+        "extractor_args": {"youtube": {"skip": ["dash", "hls"]}},
         # No "format" key here — just fetch all available info
     }
 
@@ -203,7 +204,7 @@ def _mime(ext):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     print(f"\n{'='*50}")
-    print(f"  GRABMAX Backend v4.5  —  port {port}")
+    print(f"  GRABMAX Backend v4.6  —  port {port}")
     print(f"  Cookies: {'loaded' if os.path.exists(COOKIES_FILE) else 'missing'}")
     print(f"  Audio: Opus to AAC fix applied")
     print(f"{'='*50}\n")
