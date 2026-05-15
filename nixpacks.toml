@@ -1,8 +1,8 @@
 [phases.setup]
-nixPkgs = ["ffmpeg", "python312"]
+nixPkgs = ["ffmpeg", "python312", "which"]
 
 [phases.install]
 cmds = ["pip install yt-dlp flask flask-cors gunicorn"]
 
 [start]
-cmd = "gunicorn grabmax_server:app --bind 0.0.0.0:$PORT --workers 2 --timeout 300"
+cmd = "gunicorn grabmax_server:app --bind 0.0.0.0:$PORT --workers 1 --timeout 300"
