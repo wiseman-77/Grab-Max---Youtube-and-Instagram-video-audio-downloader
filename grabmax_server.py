@@ -21,6 +21,7 @@ BASE_OPTS = {
     "quiet": True,
     "no_warnings": True,
     "geo_bypass": True,
+    "cookiefile": "cookies.txt",  # ← ADD THIS LINE
     "http_headers": {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -30,8 +31,6 @@ BASE_OPTS = {
         "Accept-Language": "en-US,en;q=0.9",
     },
 }
-
-
 # ── health check so Railway knows app is alive ────────────────────────────────
 @app.route("/", methods=["GET"])
 def health():
