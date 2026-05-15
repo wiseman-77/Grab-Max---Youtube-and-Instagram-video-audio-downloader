@@ -17,6 +17,7 @@ app = Flask(__name__)
 CORS(app)
 
 COOKIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+COOKIES_FILE_IG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "instagram_cookies.txt")
 FFMPEG_PATH  = shutil.which("ffmpeg") or "/usr/bin/ffmpeg"
 
 def base():
