@@ -1,9 +1,9 @@
 """
-GRABMAX Backend Server v4.4
+GRABMAX Backend Server v4.5
 ============================
+- Fixed: "Requested format not available" on analyze
 - AAC audio fix
-- Cookie support for YouTube bot bypass
-- Smart format fallback (no more "format not available" errors)
+- Cookie support
 - Railway PORT fix
 """
 
@@ -19,37 +19,38 @@ except ImportError:
 app = Flask(__name__)
 CORS(app)
 
-# Path to cookies file (works on Railway and locally)
 COOKIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
 
-BASE_OPTS = {
-    "quiet": True,
-    "no_warnings": True,
-    "geo_bypass": True,
-    "cookiefile": COOKIES_FILE if os.path.exists(COOKIES_FILE) else None,
-    "http_headers": {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
-        ),
-        "Accept-Language": "en-US,en;q=0.9",
-    },
-}
+def get_base_opts():
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "geo_bypass": True,
+        "http_headers": {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+    }
+    if os.path.exists(COOKIES_FILE):
+        opts["cookiefile"] = COOKIES_FILE
+    return opts
 
 
 # ── health check ──────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
 def health():
-    cookies_ok = os.path.exists(COOKIES_FILE)
     return jsonify({
         "status": "GRABMAX is running",
-        "version": "4.4",
-        "cookies": "loaded" if cookies_ok else "missing"
+        "version": "4.5",
+        "cookies": "loaded" if os.path.exists(COOKIES_FILE) else "missing"
     }), 200
 
 
-# ── /info ─────────────────────────────────────────────────────────────────────
+# ── /info — NO format specified, just get metadata ────────────────────────────
 @app.route("/info", methods=["POST"])
 def get_info():
     data = request.get_json(force=True)
@@ -58,12 +59,10 @@ def get_info():
     if not _allowed(url): return jsonify({"error": "Only YouTube and Instagram URLs are supported"}), 400
 
     opts = {
-        **BASE_OPTS,
+        **get_base_opts(),
         "skip_download": True,
-        "format": "bestvideo+bestaudio/best",
+        # No "format" key here — just fetch all available info
     }
-    # Remove None values
-    opts = {k: v for k, v in opts.items() if v is not None}
 
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -106,27 +105,19 @@ def get_info():
 def download():
     data      = request.get_json(force=True)
     url       = (data or {}).get("url", "").strip()
-    format_id = (data or {}).get("format_id", "bestvideo+bestaudio/best")
     ext       = (data or {}).get("ext", "mp4")
 
     if not url:           return jsonify({"error": "No URL provided"}), 400
     if not _allowed(url): return jsonify({"error": "Only YouTube and Instagram URLs supported"}), 400
 
-    # Smart format fallback — always works even if specific format unavailable
-    if ext in ("mp3", "m4a"):
-        smart_format = "bestaudio/best"
-    else:
-        smart_format = f"{format_id}/bestvideo+bestaudio/best/bestvideo/best"
-
     with tempfile.TemporaryDirectory() as tmp:
         out_tmpl = os.path.join(tmp, "%(title).80s.%(ext)s")
-
-        base = {k: v for k, v in BASE_OPTS.items() if v is not None}
+        base = get_base_opts()
 
         if ext in ("mp3", "m4a"):
             ydl_opts = {
                 **base,
-                "format":  smart_format,
+                "format":  "bestaudio/best",
                 "outtmpl": out_tmpl,
                 "postprocessors": [{
                     "key":              "FFmpegExtractAudio",
@@ -137,7 +128,7 @@ def download():
         else:
             ydl_opts = {
                 **base,
-                "format":              smart_format,
+                "format":              "bestvideo+bestaudio/best",
                 "outtmpl":             out_tmpl,
                 "merge_output_format": "mp4",
                 "postprocessors": [{
@@ -212,8 +203,8 @@ def _mime(ext):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     print(f"\n{'='*50}")
-    print(f"  GRABMAX Backend v4.4  —  port {port}")
-    print(f"  Cookies: {'✅ loaded' if os.path.exists(COOKIES_FILE) else '❌ missing'}")
-    print(f"  Audio: Opus → AAC fix applied ✅")
+    print(f"  GRABMAX Backend v4.5  —  port {port}")
+    print(f"  Cookies: {'loaded' if os.path.exists(COOKIES_FILE) else 'missing'}")
+    print(f"  Audio: Opus to AAC fix applied")
     print(f"{'='*50}\n")
     app.run(host="0.0.0.0", port=port, debug=False)
