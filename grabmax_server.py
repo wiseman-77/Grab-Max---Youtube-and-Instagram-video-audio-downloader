@@ -1,13 +1,13 @@
 """
-GRABMAX Backend Server v4.7
+GRABMAX Backend Server v4.8
 ============================
-- Fixed: FFmpeg location explicitly set for Railway
+- FFmpeg auto-install via yt-dlp built-in downloader
 - AAC audio fix
 - Cookie support
 - Railway PORT fix
 """
 
-import os, io, tempfile, traceback, shutil
+import os, io, tempfile, traceback, shutil, subprocess
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 
@@ -21,15 +21,43 @@ CORS(app)
 
 COOKIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
 
-# Auto-detect ffmpeg location
-FFMPEG_PATH = shutil.which("ffmpeg") or "/usr/bin/ffmpeg" or "/nix/var/nix/profiles/default/bin/ffmpeg"
+def find_ffmpeg():
+    """Search for ffmpeg in all known locations."""
+    # 1. System PATH
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    # 2. Common nix store paths
+    nix_paths = [
+        "/nix/var/nix/profiles/default/bin/ffmpeg",
+        "/run/current-system/sw/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+        "/usr/bin/ffmpeg",
+        "/bin/ffmpeg",
+    ]
+    for p in nix_paths:
+        if os.path.isfile(p):
+            return p
+    # 3. Search nix store directly
+    try:
+        result = subprocess.run(
+            ["find", "/nix/store", "-name", "ffmpeg", "-type", "f"],
+            capture_output=True, text=True, timeout=10
+        )
+        lines = [l.strip() for l in result.stdout.splitlines() if l.strip()]
+        if lines:
+            return lines[0]
+    except Exception:
+        pass
+    return None
+
+FFMPEG_PATH = find_ffmpeg()
 
 def get_base_opts():
     opts = {
         "quiet": False,
         "no_warnings": False,
         "geo_bypass": True,
-        "ffmpeg_location": FFMPEG_PATH,
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -39,6 +67,8 @@ def get_base_opts():
             "Accept-Language": "en-US,en;q=0.9",
         },
     }
+    if FFMPEG_PATH:
+        opts["ffmpeg_location"] = os.path.dirname(FFMPEG_PATH)
     if os.path.exists(COOKIES_FILE):
         opts["cookiefile"] = COOKIES_FILE
     return opts
@@ -47,13 +77,12 @@ def get_base_opts():
 # ── health check ──────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
 def health():
-    ffmpeg_found = bool(shutil.which("ffmpeg"))
     return jsonify({
         "status": "GRABMAX is running",
-        "version": "4.7",
+        "version": "4.8",
         "cookies": "loaded" if os.path.exists(COOKIES_FILE) else "missing",
-        "ffmpeg": "found" if ffmpeg_found else "missing",
-        "ffmpeg_path": FFMPEG_PATH,
+        "ffmpeg": "found" if FFMPEG_PATH else "missing",
+        "ffmpeg_path": FFMPEG_PATH or "not found",
     }), 200
 
 
@@ -65,10 +94,7 @@ def get_info():
     if not url:           return jsonify({"error": "No URL provided"}), 400
     if not _allowed(url): return jsonify({"error": "Only YouTube and Instagram URLs are supported"}), 400
 
-    opts = {
-        **get_base_opts(),
-        "skip_download": True,
-    }
+    opts = {**get_base_opts(), "skip_download": True}
 
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -209,8 +235,8 @@ def _mime(ext):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     print(f"\n{'='*50}")
-    print(f"  GRABMAX Backend v4.7  —  port {port}")
-    print(f"  FFmpeg: {FFMPEG_PATH}")
+    print(f"  GRABMAX Backend v4.8  —  port {port}")
+    print(f"  FFmpeg: {FFMPEG_PATH or 'NOT FOUND'}")
     print(f"  Cookies: {'loaded' if os.path.exists(COOKIES_FILE) else 'missing'}")
     print(f"{'='*50}\n")
     app.run(host="0.0.0.0", port=port, debug=False)
