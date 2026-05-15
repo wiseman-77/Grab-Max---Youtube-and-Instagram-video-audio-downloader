@@ -1,14 +1,14 @@
 """
-GRABMAX Backend Server v4.9
+GRABMAX Backend Server v5.0
 ============================
-- Smart format selection - works for ALL videos
+- Ignores frontend format_id, uses smart fallback always
 - FFmpeg auto-detection
 - AAC audio fix
 - Cookie support
 - Railway PORT fix
 """
 
-import os, io, tempfile, traceback, shutil, subprocess
+import os, io, tempfile, traceback, shutil
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 
@@ -42,13 +42,41 @@ def get_base_opts():
         opts["cookiefile"] = COOKIES_FILE
     return opts
 
+def smart_format(res, ext):
+    """
+    Build a format string with multiple fallbacks.
+    NEVER fails — always finds something to download.
+    """
+    if ext in ("mp3", "m4a"):
+        return "bestaudio/best"
+
+    # Map resolution label to height
+    h = {
+        "4K": 2160, "2160p": 2160,
+        "1080p": 1080, "1080": 1080,
+        "720p": 720,   "720": 720,
+        "480p": 480,   "480": 480,
+        "360p": 360,   "360": 360,
+    }.get(str(res), None)
+
+    if h:
+        return (
+            f"bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]"
+            f"/bestvideo[height<={h}]+bestaudio"
+            f"/bestvideo[height<={h}]"
+            f"/bestvideo+bestaudio"
+            f"/best"
+        )
+    # Best quality with full fallback chain
+    return "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
+
 
 # ── health check ──────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
 def health():
     return jsonify({
         "status":      "GRABMAX is running",
-        "version":     "4.9",
+        "version":     "5.0",
         "cookies":     "loaded" if os.path.exists(COOKIES_FILE) else "missing",
         "ffmpeg":      "found" if os.path.isfile(FFMPEG_PATH) else "missing",
         "ffmpeg_path": FFMPEG_PATH,
@@ -74,12 +102,6 @@ def get_info():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-    # Get all available heights from actual formats
-    heights = sorted(set(
-        f.get("height") for f in info.get("formats", [])
-        if f.get("height") and f.get("vcodec") != "none"
-    ), reverse=True)
-
     formats = [
         {
             "format_id":   f.get("format_id"),
@@ -104,34 +126,23 @@ def get_info():
         "thumbnail":   info.get("thumbnail"),
         "webpage_url": info.get("webpage_url", url),
         "formats":     formats,
-        "heights":     heights,  # available heights for this video
     })
 
 
 # ── /download ─────────────────────────────────────────────────────────────────
 @app.route("/download", methods=["POST"])
 def download():
-    data      = request.get_json(force=True)
-    url       = (data or {}).get("url", "").strip()
-    ext       = (data or {}).get("ext", "mp4")
-    quality   = (data or {}).get("quality", "best")  # best/2160/1080/720/480
+    data = request.get_json(force=True)
+    url  = (data or {}).get("url", "").strip()
+    ext  = (data or {}).get("ext", "mp4")
+    res  = (data or {}).get("res", "best")  # resolution label from frontend
 
     if not url:           return jsonify({"error": "No URL provided"}), 400
     if not _allowed(url): return jsonify({"error": "Only YouTube and Instagram URLs supported"}), 400
 
-    # ── Smart format string with multiple fallbacks ──────────────────────────
-    if ext in ("mp3", "m4a"):
-        fmt = "bestaudio/best"
-    elif quality == "best" or quality == "2160":
-        fmt = "bestvideo+bestaudio/bestvideo*+bestaudio/best"
-    elif quality == "1080":
-        fmt = "bestvideo[height<=1080]+bestaudio/bestvideo[height<=1080]/bestvideo+bestaudio/best"
-    elif quality == "720":
-        fmt = "bestvideo[height<=720]+bestaudio/bestvideo[height<=720]/bestvideo+bestaudio/best"
-    elif quality == "480":
-        fmt = "bestvideo[height<=480]+bestaudio/bestvideo[height<=480]/bestvideo+bestaudio/best"
-    else:
-        fmt = "bestvideo+bestaudio/best"
+    # Always use smart format — ignore format_id from frontend
+    fmt = smart_format(res, ext)
+    print(f"[GRABMAX] Downloading: {url} | res={res} ext={ext} | fmt={fmt}")
 
     with tempfile.TemporaryDirectory() as tmp:
         out_tmpl = os.path.join(tmp, "%(title).80s.%(ext)s")
@@ -226,7 +237,7 @@ def _mime(ext):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     print(f"\n{'='*50}")
-    print(f"  GRABMAX Backend v4.9  —  port {port}")
+    print(f"  GRABMAX Backend v5.0  —  port {port}")
     print(f"  FFmpeg: {FFMPEG_PATH}")
     print(f"  Cookies: {'loaded' if os.path.exists(COOKIES_FILE) else 'missing'}")
     print(f"{'='*50}\n")
