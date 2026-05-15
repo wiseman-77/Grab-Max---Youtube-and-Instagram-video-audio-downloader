@@ -21,7 +21,7 @@ BASE_OPTS = {
     "quiet": True,
     "no_warnings": True,
     "geo_bypass": True,
-    "cookiefile": "cookies.txt",  # ← ADD THIS LINE
+    "cookiefile": os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt"),  # ← ADD THIS LINE
     "http_headers": {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
