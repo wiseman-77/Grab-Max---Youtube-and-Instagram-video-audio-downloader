@@ -1,7 +1,8 @@
 """
-GRABMAX Backend Server v4.8
+GRABMAX Backend Server v4.9
 ============================
-- FFmpeg auto-install via yt-dlp built-in downloader
+- Smart format selection - works for ALL videos
+- FFmpeg auto-detection
 - AAC audio fix
 - Cookie support
 - Railway PORT fix
@@ -20,44 +21,14 @@ app = Flask(__name__)
 CORS(app)
 
 COOKIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
-
-def find_ffmpeg():
-    """Search for ffmpeg in all known locations."""
-    # 1. System PATH
-    found = shutil.which("ffmpeg")
-    if found:
-        return found
-    # 2. Common nix store paths
-    nix_paths = [
-        "/nix/var/nix/profiles/default/bin/ffmpeg",
-        "/run/current-system/sw/bin/ffmpeg",
-        "/usr/local/bin/ffmpeg",
-        "/usr/bin/ffmpeg",
-        "/bin/ffmpeg",
-    ]
-    for p in nix_paths:
-        if os.path.isfile(p):
-            return p
-    # 3. Search nix store directly
-    try:
-        result = subprocess.run(
-            ["find", "/nix/store", "-name", "ffmpeg", "-type", "f"],
-            capture_output=True, text=True, timeout=10
-        )
-        lines = [l.strip() for l in result.stdout.splitlines() if l.strip()]
-        if lines:
-            return lines[0]
-    except Exception:
-        pass
-    return None
-
-FFMPEG_PATH = find_ffmpeg()
+FFMPEG_PATH  = shutil.which("ffmpeg") or "/usr/bin/ffmpeg"
 
 def get_base_opts():
     opts = {
         "quiet": False,
         "no_warnings": False,
         "geo_bypass": True,
+        "ffmpeg_location": os.path.dirname(FFMPEG_PATH),
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -67,8 +38,6 @@ def get_base_opts():
             "Accept-Language": "en-US,en;q=0.9",
         },
     }
-    if FFMPEG_PATH:
-        opts["ffmpeg_location"] = os.path.dirname(FFMPEG_PATH)
     if os.path.exists(COOKIES_FILE):
         opts["cookiefile"] = COOKIES_FILE
     return opts
@@ -78,11 +47,11 @@ def get_base_opts():
 @app.route("/", methods=["GET"])
 def health():
     return jsonify({
-        "status": "GRABMAX is running",
-        "version": "4.8",
-        "cookies": "loaded" if os.path.exists(COOKIES_FILE) else "missing",
-        "ffmpeg": "found" if FFMPEG_PATH else "missing",
-        "ffmpeg_path": FFMPEG_PATH or "not found",
+        "status":      "GRABMAX is running",
+        "version":     "4.9",
+        "cookies":     "loaded" if os.path.exists(COOKIES_FILE) else "missing",
+        "ffmpeg":      "found" if os.path.isfile(FFMPEG_PATH) else "missing",
+        "ffmpeg_path": FFMPEG_PATH,
     }), 200
 
 
@@ -104,6 +73,12 @@ def get_info():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+    # Get all available heights from actual formats
+    heights = sorted(set(
+        f.get("height") for f in info.get("formats", [])
+        if f.get("height") and f.get("vcodec") != "none"
+    ), reverse=True)
 
     formats = [
         {
@@ -129,18 +104,34 @@ def get_info():
         "thumbnail":   info.get("thumbnail"),
         "webpage_url": info.get("webpage_url", url),
         "formats":     formats,
+        "heights":     heights,  # available heights for this video
     })
 
 
 # ── /download ─────────────────────────────────────────────────────────────────
 @app.route("/download", methods=["POST"])
 def download():
-    data = request.get_json(force=True)
-    url  = (data or {}).get("url", "").strip()
-    ext  = (data or {}).get("ext", "mp4")
+    data      = request.get_json(force=True)
+    url       = (data or {}).get("url", "").strip()
+    ext       = (data or {}).get("ext", "mp4")
+    quality   = (data or {}).get("quality", "best")  # best/2160/1080/720/480
 
     if not url:           return jsonify({"error": "No URL provided"}), 400
     if not _allowed(url): return jsonify({"error": "Only YouTube and Instagram URLs supported"}), 400
+
+    # ── Smart format string with multiple fallbacks ──────────────────────────
+    if ext in ("mp3", "m4a"):
+        fmt = "bestaudio/best"
+    elif quality == "best" or quality == "2160":
+        fmt = "bestvideo+bestaudio/bestvideo*+bestaudio/best"
+    elif quality == "1080":
+        fmt = "bestvideo[height<=1080]+bestaudio/bestvideo[height<=1080]/bestvideo+bestaudio/best"
+    elif quality == "720":
+        fmt = "bestvideo[height<=720]+bestaudio/bestvideo[height<=720]/bestvideo+bestaudio/best"
+    elif quality == "480":
+        fmt = "bestvideo[height<=480]+bestaudio/bestvideo[height<=480]/bestvideo+bestaudio/best"
+    else:
+        fmt = "bestvideo+bestaudio/best"
 
     with tempfile.TemporaryDirectory() as tmp:
         out_tmpl = os.path.join(tmp, "%(title).80s.%(ext)s")
@@ -149,7 +140,7 @@ def download():
         if ext in ("mp3", "m4a"):
             ydl_opts = {
                 **base,
-                "format":  "bestaudio/best",
+                "format":  fmt,
                 "outtmpl": out_tmpl,
                 "postprocessors": [{
                     "key":              "FFmpegExtractAudio",
@@ -160,7 +151,7 @@ def download():
         else:
             ydl_opts = {
                 **base,
-                "format":              "bestvideo+bestaudio/best",
+                "format":              fmt,
                 "outtmpl":             out_tmpl,
                 "merge_output_format": "mp4",
                 "postprocessors": [{
@@ -235,8 +226,8 @@ def _mime(ext):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     print(f"\n{'='*50}")
-    print(f"  GRABMAX Backend v4.8  —  port {port}")
-    print(f"  FFmpeg: {FFMPEG_PATH or 'NOT FOUND'}")
+    print(f"  GRABMAX Backend v4.9  —  port {port}")
+    print(f"  FFmpeg: {FFMPEG_PATH}")
     print(f"  Cookies: {'loaded' if os.path.exists(COOKIES_FILE) else 'missing'}")
     print(f"{'='*50}\n")
     app.run(host="0.0.0.0", port=port, debug=False)
