@@ -1,8 +1,10 @@
 """
-GRABMAX Backend Server v4.3 - Railway Fix
-==========================================
-Forces AAC audio in all MP4 downloads.
-Fixed PORT binding for Railway deployment.
+GRABMAX Backend Server v4.4
+============================
+- AAC audio fix
+- Cookie support for YouTube bot bypass
+- Smart format fallback (no more "format not available" errors)
+- Railway PORT fix
 """
 
 import os, io, tempfile, traceback
@@ -17,11 +19,14 @@ except ImportError:
 app = Flask(__name__)
 CORS(app)
 
+# Path to cookies file (works on Railway and locally)
+COOKIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+
 BASE_OPTS = {
     "quiet": True,
     "no_warnings": True,
     "geo_bypass": True,
-    "cookiefile": os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt"),  # ← ADD THIS LINE
+    "cookiefile": COOKIES_FILE if os.path.exists(COOKIES_FILE) else None,
     "http_headers": {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -31,10 +36,17 @@ BASE_OPTS = {
         "Accept-Language": "en-US,en;q=0.9",
     },
 }
-# ── health check so Railway knows app is alive ────────────────────────────────
+
+
+# ── health check ──────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "GRABMAX is running", "version": "4.3"}), 200
+    cookies_ok = os.path.exists(COOKIES_FILE)
+    return jsonify({
+        "status": "GRABMAX is running",
+        "version": "4.4",
+        "cookies": "loaded" if cookies_ok else "missing"
+    }), 200
 
 
 # ── /info ─────────────────────────────────────────────────────────────────────
@@ -45,8 +57,16 @@ def get_info():
     if not url:           return jsonify({"error": "No URL provided"}), 400
     if not _allowed(url): return jsonify({"error": "Only YouTube and Instagram URLs are supported"}), 400
 
+    opts = {
+        **BASE_OPTS,
+        "skip_download": True,
+        "format": "bestvideo+bestaudio/best",
+    }
+    # Remove None values
+    opts = {k: v for k, v in opts.items() if v is not None}
+
     try:
-        with yt_dlp.YoutubeDL({**BASE_OPTS, "skip_download": True}) as ydl:
+        with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
     except yt_dlp.utils.DownloadError as e:
         return jsonify({"error": str(e)}), 422
@@ -92,13 +112,21 @@ def download():
     if not url:           return jsonify({"error": "No URL provided"}), 400
     if not _allowed(url): return jsonify({"error": "Only YouTube and Instagram URLs supported"}), 400
 
+    # Smart format fallback — always works even if specific format unavailable
+    if ext in ("mp3", "m4a"):
+        smart_format = "bestaudio/best"
+    else:
+        smart_format = f"{format_id}/bestvideo+bestaudio/best/bestvideo/best"
+
     with tempfile.TemporaryDirectory() as tmp:
         out_tmpl = os.path.join(tmp, "%(title).80s.%(ext)s")
 
+        base = {k: v for k, v in BASE_OPTS.items() if v is not None}
+
         if ext in ("mp3", "m4a"):
             ydl_opts = {
-                **BASE_OPTS,
-                "format":  "bestaudio/best",
+                **base,
+                "format":  smart_format,
                 "outtmpl": out_tmpl,
                 "postprocessors": [{
                     "key":              "FFmpegExtractAudio",
@@ -108,8 +136,8 @@ def download():
             }
         else:
             ydl_opts = {
-                **BASE_OPTS,
-                "format":              format_id,
+                **base,
+                "format":              smart_format,
                 "outtmpl":             out_tmpl,
                 "merge_output_format": "mp4",
                 "postprocessors": [{
@@ -184,7 +212,8 @@ def _mime(ext):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     print(f"\n{'='*50}")
-    print(f"  GRABMAX Backend v4.3  — port {port}")
-    print(f"  Audio: Opus → AAC fix applied")
+    print(f"  GRABMAX Backend v4.4  —  port {port}")
+    print(f"  Cookies: {'✅ loaded' if os.path.exists(COOKIES_FILE) else '❌ missing'}")
+    print(f"  Audio: Opus → AAC fix applied ✅")
     print(f"{'='*50}\n")
     app.run(host="0.0.0.0", port=port, debug=False)
